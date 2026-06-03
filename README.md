@@ -23,4 +23,4 @@ full conversation history is the value. Now the bot
 remembers what was ordered, what was changed, 
 and confirms the correct final order.
 
-Copy karo, README mein daalo, push karo aur GitHub link share kar! 🚀Sonnet 4.6 Low
+
