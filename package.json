@@ -10,8 +10,13 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "groq-sdk": "^1.2.1"
+    "groq-sdk": "^1.2.1",
+    "mongoose": "^9.6.3",
+    "razorpay": "^2.9.6",
+    "socket.io": "^4.8.3",
+    "twilio": "^6.0.2"
   }
 }

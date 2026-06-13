@@ -1,12 +1,42 @@
 require('dotenv').config()
 const express = require('express')
 const Groq = require('groq-sdk')
+const mongoose = require('mongoose')
+const http = require('http')
+const { Server } = require('socket.io')
+const Razorpay = require('razorpay')
+const twilio = require('twilio')(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+)
 
 const app = express()
+const server = http.createServer(app)
+const io = new Server(server, { cors: { origin: '*' } })
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+})
+
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
 app.use(express.urlencoded({ extended: true }))
 app.use(express.json())
+
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('MongoDB connected!'))
+  .catch(err => console.log('MongoDB error:', err))
+
+const orderSchema = new mongoose.Schema({
+  customerNumber: String,
+  items: String,
+  total: String,
+  status: { type: String, default: 'pending' },
+  createdAt: { type: Date, default: Date.now }
+})
+
+const Order = mongoose.model('Order', orderSchema)
 
 const menu = `
 Sharma's Kitchen Menu:
@@ -28,11 +58,7 @@ app.post('/webhook', async (req, res) => {
     sessions[from] = { messages: [] }
   }
 
-  sessions[from].messages.push({
-    role: 'user',
-    content: message
-  })
-
+  sessions[from].messages.push({ role: 'user', content: message })
   console.log(`Message from ${from}: ${message}`)
 
   const aiReply = await groq.chat.completions.create({
@@ -46,7 +72,10 @@ Rules:
 - Greet customers warmly
 - Take their order and remember it throughout conversation
 - If customer changes item, update the order
-- When customer confirms, show final order with total
+- When customer says "confirm" or "order confirm karo", reply with EXACTLY this format:
+  ORDER_CONFIRMED
+  Items: [list items here]
+  Total: Rs [amount]
 - Reply in Hinglish
 - Keep replies short and friendly
 - Add food emojis`
@@ -56,18 +85,112 @@ Rules:
   })
 
   const reply = aiReply.choices[0].message.content
+  sessions[from].messages.push({ role: 'assistant', content: reply })
 
-  sessions[from].messages.push({
-    role: 'assistant',
-    content: reply
-  })
+  if (reply.includes('ORDER_CONFIRMED')) {
+    const itemsMatch = reply.match(/Items:\s*(.+?)(?=Total:)/s)
+    const itemsText = itemsMatch ? itemsMatch[1].trim() : 'Order'
+    const totalMatch = reply.match(/Total:\s*Rs\s*(\d+)/)
+    const totalAmount = totalMatch ? totalMatch[1] : '0'
 
+    // MongoDB mein save karo
+    const newOrder = new Order({
+      customerNumber: from,
+      items: itemsText,
+      total: totalAmount,
+      status: 'pending'
+    })
+    await newOrder.save()
+    console.log('Order saved to MongoDB!')
+
+    // Dashboard ko notify karo
+    io.emit('new_order', {
+      customerPhone: from.replace('whatsapp:', ''),
+      items: [{ name: itemsText, quantity: 1 }],
+      totalAmount: parseInt(totalAmount) || 0,
+      status: 'pending',
+      createdAt: new Date()
+    })
+
+    // Razorpay payment link banao
+    const paymentLink = await razorpay.paymentLink.create({
+      amount: parseInt(totalAmount) * 100,
+      currency: 'INR',
+      description: `Sharma's Kitchen Order`,
+      notify: { sms: false, email: false },
+      reminder_enable: false,
+      notes: { customerNumber: from, items: itemsText }
+    })
+    console.log('Payment link created:', paymentLink.short_url)
+
+    // Payment link WhatsApp pe bhejo
+    await twilio.messages.create({
+      from: 'whatsapp:+14155238886',
+      to: from,
+      body: `💳 Payment link:\n${paymentLink.short_url}\n\nTotal: Rs ${totalAmount}`
+    })
+    console.log('Payment link sent!')
+  }
+
+  const cleanReply = reply.replace('ORDER_CONFIRMED', '✅ Order Confirmed!')
   console.log(`AI Reply: ${reply}`)
 
   res.set('Content-Type', 'text/xml')
-  res.send(`<Response><Message>${reply}</Message></Response>`)
+  res.send(`<Response><Message>${cleanReply}</Message></Response>`)
 })
 
-app.listen(3000, () => {
-  console.log('Server chal raha hai port 3000 pe')
+app.get('/api/orders', async (req, res) => {
+  const orders = await Order.find().sort({ createdAt: -1 })
+  const formattedOrders = orders.map(order => ({
+    _id: order._id,
+    customerPhone: order.customerNumber.replace('whatsapp:', ''),
+    items: [{ name: order.items, quantity: 1 }],
+    totalAmount: parseInt(order.total) || 0,
+    status: order.status,
+    createdAt: order.createdAt
+  }))
+  res.json(formattedOrders)
+})
+
+app.patch('/api/orders/:id/status', async (req, res) => {
+  const order = await Order.findByIdAndUpdate(
+    req.params.id,
+    { status: req.body.status },
+    { returnDocument: 'after' }
+  )
+  res.json(order)
+})
+
+app.get('/api/menu', async (req, res) => {
+  res.json([
+    { _id: '1', name: 'Butter Chicken', price: 280, available: true },
+    { _id: '2', name: 'Paneer Tikka', price: 240, available: true },
+    { _id: '3', name: 'Dal Makhani', price: 180, available: true },
+    { _id: '4', name: 'Naan', price: 40, available: true },
+    { _id: '5', name: 'Rice', price: 60, available: true },
+    { _id: '6', name: 'Lassi', price: 80, available: true },
+  ])
+})
+
+app.get('/api/analytics', async (req, res) => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const todayOrders = await Order.find({ createdAt: { $gte: today } })
+  
+  // total field directly number hai — Rs nahi likha
+  const totalRevenue = todayOrders.reduce((sum, order) => {
+    return sum + (parseInt(order.total) || 0)
+  }, 0)
+
+  res.json({
+    ordersToday: todayOrders.length,
+    revenueToday: totalRevenue,
+    mostOrdered: 'Butter Chicken',
+    avgOrderValue: todayOrders.length ? Math.round(totalRevenue / todayOrders.length) : 0
+  })
+})
+
+server.listen(3000, () => {
+  console.log('server is running on port 3000')
 })
