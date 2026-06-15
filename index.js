@@ -35,22 +35,47 @@ const orderSchema = new mongoose.Schema({
   status: { type: String, default: 'pending' },
   createdAt: { type: Date, default: Date.now }
 })
+const menuSchema = new mongoose.Schema({
+  name: String,
+  price: Number,
+  available: { type: Boolean, default: true }
+})
 
+const MenuItem = mongoose.model('MenuItem', menuSchema)
+const seedMenu = async () => {
+  const count = await MenuItem.countDocuments()
+  if (count === 0) {
+    await MenuItem.insertMany([
+      { name: 'Butter Chicken', price: 280, available: true },
+      { name: 'Paneer Tikka', price: 240, available: true },
+      { name: 'Dal Makhani', price: 180, available: true },
+      { name: 'Naan', price: 40, available: true },
+      { name: 'Rice', price: 60, available: true },
+      { name: 'Lassi', price: 80, available: true },
+    ])
+    console.log('Menu seeded!')
+  }
+}
+seedMenu()
 const Order = mongoose.model('Order', orderSchema)
 
-const menu = `
-Sharma's Kitchen Menu:
-- Butter Chicken - Rs 280
-- Paneer Tikka - Rs 240
-- Dal Makhani - Rs 180
-- Naan - Rs 40
-- Rice - Rs 60
-- Lassi - Rs 80
-`
+// const menu = `
+// Sharma's Kitchen Menu:
+// - Butter Chicken - Rs 280
+// - Paneer Tikka - Rs 240
+// - Dal Makhani - Rs 180
+// - Naan - Rs 40
+// - Rice - Rs 60
+// - Lassi - Rs 80
+// `
 
 const sessions = {}
 
 app.post('/webhook', async (req, res) => {
+  const menuItems = await MenuItem.find({ available: true })
+const dynamicMenu = menuItems
+  .map(item => `- ${item.name} - Rs ${item.price}`)
+  .join('\n')
   const message = req.body.Body
   const from = req.body.From
 
@@ -67,8 +92,12 @@ app.post('/webhook', async (req, res) => {
       {
         role: 'system',
         content: `You are a friendly ordering assistant for Sharma's Kitchen.
-${menu}
-Rules:
+${dynamicMenu}
+STRICT RULES:
+- ONLY accept orders for items listed above
+- If customer asks for item NOT in the list, say it's unavailable
+- Never accept order for unavailable item even if customer insists
+- After ORDER_CONFIRMED, start fresh — don't take more orders
 - Greet customers warmly
 - Take their order and remember it throughout conversation
 - If customer changes item, update the order
@@ -161,15 +190,37 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   res.json(order)
 })
 
+// GET /menu
 app.get('/api/menu', async (req, res) => {
-  res.json([
-    { _id: '1', name: 'Butter Chicken', price: 280, available: true },
-    { _id: '2', name: 'Paneer Tikka', price: 240, available: true },
-    { _id: '3', name: 'Dal Makhani', price: 180, available: true },
-    { _id: '4', name: 'Naan', price: 40, available: true },
-    { _id: '5', name: 'Rice', price: 60, available: true },
-    { _id: '6', name: 'Lassi', price: 80, available: true },
-  ])
+  const items = await MenuItem.find()
+  res.json(items)
+})
+
+// PATCH /menu/:id — toggle available
+app.patch('/api/menu/:id', async (req, res) => {
+  const item = await MenuItem.findByIdAndUpdate(
+    req.params.id,
+    { available: req.body.available },
+    { returnDocument: 'after' }
+  )
+  res.json(item)
+})
+
+// POST /menu — add item
+app.post('/api/menu', async (req, res) => {
+  const item = new MenuItem({
+    name: req.body.name,
+    price: req.body.price,
+    available: true
+  })
+  await item.save()
+  res.json(item)
+})
+
+// DELETE /menu/:id
+app.delete('/api/menu/:id', async (req, res) => {
+  await MenuItem.findByIdAndDelete(req.params.id)
+  res.json({ success: true })
 })
 
 app.get('/api/analytics', async (req, res) => {
