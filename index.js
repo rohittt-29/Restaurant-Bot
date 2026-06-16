@@ -1,5 +1,6 @@
 require('dotenv').config()
 const express = require('express')
+const cors = require('cors')
 const Groq = require('groq-sdk')
 const mongoose = require('mongoose')
 const http = require('http')
@@ -12,7 +13,44 @@ const twilio = require('twilio')(
 
 const app = express()
 const server = http.createServer(app)
-const io = new Server(server, { cors: { origin: '*' } })
+
+// ─── CORS CONFIGURATION ──────────────────────────────────────────────────────
+// WHY: Browser security blocks cross-origin requests unless the server
+// explicitly allows the requesting origin. Without this, every API call
+// from your Vercel frontend will fail with "CORS error" in the console.
+//
+// Replace YOUR_VERCEL_APP_URL with your actual Vercel deployment URL.
+// You can add multiple URLs (e.g. preview deployments) to the array.
+const ALLOWED_ORIGINS = [
+  process.env.FRONTEND_URL || 'https://your-vercel-app.vercel.app',
+  'http://localhost:5173',   // Vite default dev port
+  'http://localhost:5174',   // Vite alternate dev port
+  'http://localhost:3000',   // In case frontend and backend run on same machine
+]
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin header (Twilio webhooks, curl, Postman)
+    if (!origin) return callback(null, true)
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true)
+    console.warn(`[CORS] Blocked origin: ${origin}`)
+    callback(new Error(`CORS policy: origin ${origin} is not allowed`))
+  },
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+}
+
+// Apply CORS to all Express routes
+app.use(cors(corsOptions))
+
+// Socket.IO with the same CORS rules
+const io = new Server(server, {
+  cors: {
+    origin: ALLOWED_ORIGINS,
+    methods: ['GET', 'POST'],
+  }
+})
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
