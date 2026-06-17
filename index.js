@@ -171,12 +171,15 @@ STRICT RULES:
     console.log('Order saved to MongoDB!')
 
     // Dashboard ko notify karo
+    // NOTE: items must be an array of objects with 'name' and 'qty' keys
+    // to match the shape returned by GET /api/orders and expected by OrderCard
     io.emit('new_order', {
+      _id: newOrder._id,
       customerPhone: from.replace('whatsapp:', ''),
-      items: [{ name: itemsText, quantity: 1 }],
+      items: [{ name: itemsText, qty: 1 }],
       totalAmount: parseInt(totalAmount) || 0,
       status: 'pending',
-      createdAt: new Date()
+      createdAt: newOrder.createdAt
     })
 
     // Razorpay payment link banao
@@ -206,26 +209,34 @@ STRICT RULES:
   res.send(`<Response><Message>${cleanReply}</Message></Response>`)
 })
 
+// Helper: format a raw Order document into the shape the dashboard expects
+const formatOrder = (order) => ({
+  _id: order._id,
+  customerPhone: order.customerNumber
+    ? order.customerNumber.replace('whatsapp:', '')
+    : 'Unknown',
+  items: order.items
+    ? [{ name: order.items, qty: 1 }]
+    : [],
+  totalAmount: parseInt(order.total) || 0,
+  status: order.status || 'pending',
+  createdAt: order.createdAt || order._id.getTimestamp()
+})
+
 app.get('/api/orders', async (req, res) => {
   const orders = await Order.find().sort({ createdAt: -1 })
-  const formattedOrders = orders.map(order => ({
-    _id: order._id,
-    customerPhone: order.customerNumber.replace('whatsapp:', ''),
-    items: [{ name: order.items, quantity: 1 }],
-    totalAmount: parseInt(order.total) || 0,
-    status: order.status,
-    createdAt: order.createdAt
-  }))
-  res.json(formattedOrders)
+  res.json(orders.map(formatOrder))
 })
 
 app.patch('/api/orders/:id/status', async (req, res) => {
   const order = await Order.findByIdAndUpdate(
     req.params.id,
     { status: req.body.status },
-    { returnDocument: 'after' }
+    { new: true }  // returnDocument:'after' is Mongoose 6+ syntax; 'new:true' works in all versions
   )
-  res.json(order)
+  // Return the same formatted shape as GET /api/orders
+  // so the frontend always gets items as an array, never a raw string
+  res.json(formatOrder(order))
 })
 
 // GET /menu
