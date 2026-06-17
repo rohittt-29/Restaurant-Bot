@@ -47,7 +47,7 @@ app.use(cors(corsOptions))
 // Socket.IO with the same CORS rules
 const io = new Server(server, {
   cors: {
-   origin: 'https://getserveai.vercel.app',
+    origin: ALLOWED_ORIGINS,
     methods: ['GET', 'POST'],
   }
 })
