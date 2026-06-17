@@ -22,11 +22,12 @@ const server = http.createServer(app)
 // Replace YOUR_VERCEL_APP_URL with your actual Vercel deployment URL.
 // You can add multiple URLs (e.g. preview deployments) to the array.
 const ALLOWED_ORIGINS = [
-  process.env.FRONTEND_URL || 'https://getserveai.vercel.app',
-  'http://localhost:5173',   // Vite default dev port
-  'http://localhost:5174',   // Vite alternate dev port
-  'http://localhost:3000',   // In case frontend and backend run on same machine
-]
+  'https://getserveai.vercel.app',          // Production frontend (always allowed)
+  process.env.FRONTEND_URL,                 // Optional: set in Render env for preview deployments
+  'http://localhost:5173',                  // Vite default dev port
+  'http://localhost:5174',                  // Vite alternate dev port
+  'http://localhost:3000',                  // In case frontend and backend run on same machine
+].filter(Boolean)                           // Remove undefined if FRONTEND_URL is not set
 
 const corsOptions = {
   origin: (origin, callback) => {
