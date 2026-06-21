@@ -6,6 +6,7 @@ const mongoose = require('mongoose')
 const http = require('http')
 const { Server } = require('socket.io')
 const Razorpay = require('razorpay')
+const crypto = require('crypto')
 const twilio = require('twilio')(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
@@ -71,7 +72,7 @@ const orderSchema = new mongoose.Schema({
   customerNumber: String,
   items: String,
   total: String,
-  status: { type: String, default: 'pending' },
+ status: { type: String, default: 'awaiting_payment' },
   createdAt: { type: Date, default: Date.now }
 })
 const menuSchema = new mongoose.Schema({
@@ -192,7 +193,7 @@ Total: Rs 360`
       customerNumber: from,
       items: itemsText,
       total: totalAmount,
-      status: 'pending'
+      status: 'awaiting_payment'
     })
     await newOrder.save()
     console.log('Order saved to MongoDB!')
@@ -205,7 +206,7 @@ Total: Rs 360`
       customerPhone: from.replace('whatsapp:', ''),
       items: [{ name: itemsText, qty: 1 }],
       totalAmount: parseInt(totalAmount) || 0,
-      status: 'pending',
+      status: 'awaiting_payment',
       createdAt: newOrder.createdAt
     })
 
@@ -316,6 +317,56 @@ app.get('/api/analytics', async (req, res) => {
     mostOrdered: 'Butter Chicken',
     avgOrderValue: todayOrders.length ? Math.round(totalRevenue / todayOrders.length) : 0
   })
+})
+// Razorpay webhook — payment successful hone pe call hota hai
+app.post('/api/razorpay-webhook', express.json(), async (req, res) => {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET
+  const signature = req.headers['x-razorpay-signature']
+
+  // Verify karo ki request genuinely Razorpay se aayi hai
+  const expectedSignature = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(JSON.stringify(req.body))
+    .digest('hex')
+
+  if (signature !== expectedSignature) {
+    console.log('Webhook signature mismatch!')
+    return res.status(400).json({ error: 'Invalid signature' })
+  }
+
+  const event = req.body.event
+
+  if (event === 'payment_link.paid') {
+    const paymentLinkId = req.body.payload.payment_link.entity.id
+    const notes = req.body.payload.payment_link.entity.notes
+    const customerNumber = notes.customerNumber
+
+    // Order ko find karo aur status update karo
+    const order = await Order.findOneAndUpdate(
+      { customerNumber: customerNumber, status: 'awaiting_payment' },
+      { status: 'pending' },
+      { new: true, sort: { createdAt: -1 } }
+    )
+
+    if (order) {
+      console.log('Payment confirmed! Order status updated:', order._id)
+
+      // Dashboard ko notify karo
+      io.emit('payment_confirmed', {
+        _id: order._id,
+        status: 'pending'
+      })
+
+      // Customer ko confirmation bhejo
+      await twilio.messages.create({
+        from: 'whatsapp:+14155238886',
+        to: customerNumber,
+        body: `✅ Payment received!`
+      })
+    }
+  }
+
+  res.json({ status: 'ok' })
 })
 
 server.listen(3000, () => {
