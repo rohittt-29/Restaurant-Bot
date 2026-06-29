@@ -264,6 +264,8 @@ app.patch('/api/orders/:id/status', async (req, res) => {
   )
   // Return the same formatted shape as GET /api/orders
   // so the frontend always gets items as an array, never a raw string
+
+  const formatted = formatOrder(order)
   io.emit('order_status_updated', formatted)
   res.json(formatOrder(order))
 })
